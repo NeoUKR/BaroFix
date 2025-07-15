@@ -3,7 +3,7 @@ import numpy as np
 from pymavlink import mavutil
 import threading
 
-VERSION = '0.0.5'
+VERSION = '0.0.6'
 
 class BaroFix:
 	BARO_INIT_PULL = 200
