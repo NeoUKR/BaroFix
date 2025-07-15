@@ -7,7 +7,7 @@ import logging
 import os
 from datetime import datetime
 
-VERSION = '0.2.5'
+VERSION = '0.3.0'
 INFO = logging.INFO
 DEBUG = logging.DEBUG
 
@@ -17,6 +17,7 @@ class BaroFix:
 	BARO_READ_DELAY = 0.04
 	
 	__slots__ = (
+		"master",
 		"logger_telem",
 		"logger_error",
 		"logger_debug",
@@ -127,10 +128,11 @@ class BaroFix:
 
 		self.log_debug_message("Ground pressure calculation finish.",level=INFO)
 
-
 	def thread_init(self):
 		self.log_debug_message("Thread initialization start.",level=INFO)
 		threading.Thread(target=self.thread_baro).start()
+		self.fc_init()
+		threading.Thread(target=self.thread_fc).start()
 		self.log_debug_message("Thread initialization finish.",level=INFO)
 
 	def thread_baro(self):
@@ -175,13 +177,26 @@ class BaroFix:
 				#=========================================
 			time.sleep(0.0002)
 		
+		
+	def thread_fc(self):
+		self.log_debug_message("FC comunication started.",level=INFO)
+		
+		while True:
+			print(1)
+			#msg = self.master.recv_match(type='LOCAL_POSITION_NED', blocking=True, timeout=0.02)
+			msg = self.master.recv_match(type='SYS_STATUS', blocking=True, timeout=0.02)
+			 
+			print(msg)
+			time.sleep(0.001)
+		pass
+		
+		
 	def fc_init(self):
 		self.log_debug_message("FC connection.",level=INFO)
-		print('start connection')
 		connect_string = '/dev/ttyS0'
-		master = mavutil.mavlink_connection(connect_string, baud = 115200, source_system=1, source_component=145)
+		self.master = mavutil.mavlink_connection(connect_string, baud = 115200, source_system=1, source_component=145)
 		self.log_debug_message("FC initialization start.",level=INFO)
-		master.wait_heartbeat()
+		self.master.wait_heartbeat()
 		self.log_debug_message("FC initialization finish.",level=INFO)
 		
 	
