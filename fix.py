@@ -7,15 +7,7 @@ import logging
 import os
 from datetime import datetime
 
-VERSION = '0.2.0'
-
-print('start connection')
-connect_string = '/dev/ttyS0'
-master = mavutil.mavlink_connection(connect_string, baud = 115200, source_system=1, source_component=145)
-print('connected')
-master.wait_heartbeat()
-print('heart beat get')
-
+VERSION = '0.2.1'
 
 class BaroFix:
 	BARO_INIT_PULL = 200
@@ -38,6 +30,7 @@ class BaroFix:
 	
 	def __init__(self):
 		self.baro_init()
+		#self.fc_init()
 		self.thread_init()
 		self.log_init()
 		
@@ -50,8 +43,22 @@ class BaroFix:
 		return round(np.mean(filtered), 2)
 		
 	def log_init(self):
+		datetime_now = datetime.now()
+		datetime_str = datetime_now.strftime("%Y%m%d_%H%M%S")		
+		folder_log = 'log/' + datetime_str
+		
+		os.mkdir(folder_log)
+		
 		self.logger_telem = logging.getLogger('Telemetry')
+		self.logger_telem.setLevel(logging.INFO)
+		handler_telem = logging.FileHandler(folder_log + '/' + "tel_" + datetime_str + ".log")
+		handler_telem.setFormatter(logging.Formatter('%(message)s'))
+		self.logger_telem.addHandler(handler_telem)
+		
+		self.logger_telem.info("test")
+		
 		self.logger_error = logging.getLogger('Error')
+		
 		self.logger_debug = logging.getLogger('Debug')
 		
 	def baro_init(self):
@@ -104,7 +111,13 @@ class BaroFix:
 				
 			time.sleep(0.0002)
 		
-		
+	def fc_init(self):
+		print('start connection')
+		connect_string = '/dev/ttyS0'
+		master = mavutil.mavlink_connection(connect_string, baud = 115200, source_system=1, source_component=145)
+		print('connected')
+		master.wait_heartbeat()
+		print('heart beat get')
 		
 fix = BaroFix()
 #print(fix.baro1_press_gnd)
