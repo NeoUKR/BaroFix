@@ -3,8 +3,19 @@ import numpy as np
 from pymavlink import mavutil
 import threading
 import time
+import logging
+import os
+from datetime import datetime
 
-VERSION = '0.0.8'
+VERSION = '0.2.0'
+
+print('start connection')
+connect_string = '/dev/ttyS0'
+master = mavutil.mavlink_connection(connect_string, baud = 115200, source_system=1, source_component=145)
+print('connected')
+master.wait_heartbeat()
+print('heart beat get')
+
 
 class BaroFix:
 	BARO_INIT_PULL = 200
@@ -12,6 +23,9 @@ class BaroFix:
 	BARO_READ_DELAY = 0.04
 	
 	__slots__ = (
+		"logger_telem",
+		"logger_error",
+		"logger_debug",
 		"baro1",
 		"baro2",
 		"baro1_press",
@@ -25,6 +39,7 @@ class BaroFix:
 	def __init__(self):
 		self.baro_init()
 		self.thread_init()
+		self.log_init()
 		
 	def meadle_outliers(self, data):
 		mean = np.mean(data)
@@ -33,6 +48,11 @@ class BaroFix:
 		threshold = self.BARO_STD_DEV * std
 		filtered = [x for x in data if abs(x - mean) <= threshold]
 		return round(np.mean(filtered), 2)
+		
+	def log_init(self):
+		self.logger_telem = logging.getLogger('Telemetry')
+		self.logger_error = logging.getLogger('Error')
+		self.logger_debug = logging.getLogger('Debug')
 		
 	def baro_init(self):
 		self.baro1 = BME280(0x76)
