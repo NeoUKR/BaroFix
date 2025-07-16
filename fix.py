@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 import RPi.GPIO as GPIO
 
-VERSION = '0.4.5'
+VERSION = '0.4.6'
 INFO = logging.INFO
 DEBUG = logging.DEBUG
 
