@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 import RPi.GPIO as GPIO
 
-VERSION = '0.4.0'
+VERSION = '0.4.4'
 INFO = logging.INFO
 DEBUG = logging.DEBUG
 
@@ -163,7 +163,7 @@ class BaroFix:
 		self.log_telemetry_message("FMT, 2, 99, BAR1, Qffff, TimeUS, Pressure, Altitude, Frequency, Frequency values")
 		self.log_telemetry_message("FMT, 3, 99, BAR2, Qffff, TimeUS, Pressure, Altitude, Frequency, Frequency values")
 		self.log_telemetry_message("FMT, 4, 99, GNSS, Qffff, TimeUS")
-		self.log_telemetry_message("FMT, 5, 99, GP, Qffff, TimeUS, Velocity x, Velocity y, Velocity z, Velocity ground")
+		self.log_telemetry_message("FMT, 5, 99, GP, Qffff, TimeUS, Velocity x, Velocity y, Velocity z, Velocity ground, Altitude, Altutude relative")
 		self.log_telemetry_message("FMT, 6, 99, RC, Qffff, TimeUS, Ch 1, Ch 2, Ch 3, Ch 4, Ch 5, Ch 6, Ch 7, Ch 8, Ch 9, Ch 10, Ch 11, Ch 12")
 		self.log_telemetry_message("FMT, 7, 99, RF, Qffff, TimeUS, Altitude, Altitude origin, Altitude delta, Speed")
 
@@ -368,7 +368,7 @@ class BaroFix:
 					min_distance=1,
 					max_distance=40000,
 					current_distance=self.rf_alt,
-					type=4,
+					type=3,#type=4,
 					id=0,
 					orientation=25,
 					covariance=0
