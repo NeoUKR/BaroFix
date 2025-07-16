@@ -1,6 +1,8 @@
 from baro import BME280
 import numpy as np
 from pymavlink import mavutil
+from pymavlink.dialects.v10 import ardupilotmega as mavlink1
+from pymavlink.dialects.v20 import ardupilotmega as mavlink2
 import threading
 import time
 import logging
@@ -8,7 +10,7 @@ import os
 from datetime import datetime
 import RPi.GPIO as GPIO
 
-VERSION = '0.4.6'
+VERSION = '0.5.0'
 INFO = logging.INFO
 DEBUG = logging.DEBUG
 
@@ -16,7 +18,8 @@ class BaroFix:
 	BARO_INIT_PULL = 200
 	BARO_STD_DEV = 1.2
 	BARO_READ_DELAY = 0.04
-	RUN_PAUSE_S = 20
+	#RUN_PAUSE_S = 20
+	RUN_PAUSE_S = 1
 	
 	__slots__ = (
 		"time_booting_s",
@@ -281,6 +284,8 @@ class BaroFix:
 			try:
 				msg = self.master.recv_match(type=types_list, blocking=True, timeout=0.02)
 				if msg is not None:
+					#print(msg._mavlink_version)
+					#print(msg)
 					msg_type = msg.get_type() 
 					if msg_type == "RC_CHANNELS":
 						ch1 = msg.chan1_raw
@@ -363,6 +368,24 @@ class BaroFix:
 
 				self.log_telemetry_rf(self.rf_alt, cur_alt, baro_delta, self.gp_vg)
 				#---------------
+				
+				sign = mavlink2.MAVLink_distance_sensor_message(
+					time_boot_ms = self.get_time_boot_ms(),
+					min_distance = 1,
+					max_distance = 40000,
+					current_distance = self.rf_alt,
+					type = 3,
+					id = 0,
+					orientation = 25,#orientation = 100,#
+					covariance = 0,
+					horizontal_fov = 3,
+					vertical_fov = 3,
+					quaternion = [1, 0, 0, 0],
+					signal_quality = 100
+				)
+				self.master.mav.send(sign)
+				
+				'''
 				self.master.mav.distance_sensor_send(
 					time_boot_ms=self.get_time_boot_ms(),
 					min_distance=1,
@@ -373,6 +396,7 @@ class BaroFix:
 					orientation=25,
 					covariance=0
 				)
+				'''
 				#---------------
 				#---------------
 			except Exception as e:
@@ -385,10 +409,10 @@ class BaroFix:
 	def fc_init(self):
 		self.log_debug_message("FC connection.",level=INFO)
 		connect_string = '/dev/ttyS0'
+		#self.master = mavutil.mavlink_connection(connect_string, baud = 115200, source_system=1, source_component=145)
 		self.master = mavutil.mavlink_connection(connect_string, baud = 115200, source_system=1, source_component=145)
 		self.log_debug_message("FC initialization start.",level=INFO)
 		self.master.wait_heartbeat()
-		
 		
 		self.master.mav.request_data_stream_send(
 			self.master.target_system,
