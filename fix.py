@@ -289,15 +289,21 @@ class BaroFix:
 					#print(msg)
 					msg_type = msg.get_type() 
 					if msg_type == 'ATTITUDE':
+						#print(msg)
 						if msg.pitch > 0.785:
 							pitch = 0.785
 						elif msg.pitch < -0.785:
 							pitch = -0.785
+						else:
+							pitch = msg.pitch
 						
 						if msg.roll > 0.785:
 							roll = 0.785
 						elif msg.roll > -0.785:
 							roll = -0.785
+						else:
+							roll = msg.roll
+							
 						alt_compensate = self.baro2_alt / (math.cos(pitch) * math.cos(roll))
 						
 						try:
@@ -328,7 +334,7 @@ class BaroFix:
 
 							self.log_telemetry_rf(self.rf_alt, cur_alt, baro_delta, self.gp_vg)
 							#---------------
-							
+							'''
 							sign = mavlink2.MAVLink_distance_sensor_message(
 								time_boot_ms = self.get_time_boot_ms(),
 								min_distance = 1,
@@ -344,8 +350,8 @@ class BaroFix:
 								signal_quality = 100
 							)
 							self.master.mav.send(sign)
-							
 							'''
+							
 							self.master.mav.distance_sensor_send(
 								time_boot_ms=self.get_time_boot_ms(),
 								min_distance=1,
@@ -356,7 +362,7 @@ class BaroFix:
 								orientation=25,
 								covariance=0
 							)
-							'''
+							
 							#---------------
 							#---------------
 						except Exception as e:
@@ -429,9 +435,9 @@ class BaroFix:
 		self.log_debug_message("FC initialization start.",level=INFO)
 		self.master.wait_heartbeat()
 		
-		master.mav.request_data_stream_send(
-			target_system=master.target_system,
-			target_component=master.target_component,
+		self.master.mav.request_data_stream_send(
+			target_system=self.master.target_system,
+			target_component=self.master.target_component,
 			req_stream_id=mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,  # Stream with ATTITUDE
 			req_message_rate=20,   # Frequency in Hz
 			start_stop=1           # 1 = start sending, 0 = stop
