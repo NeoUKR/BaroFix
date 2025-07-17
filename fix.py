@@ -9,8 +9,9 @@ import logging
 import os
 from datetime import datetime
 import RPi.GPIO as GPIO
+import math
 
-VERSION = '0.5.0'
+VERSION = '0.6.1'
 INFO = logging.INFO
 DEBUG = logging.DEBUG
 
@@ -277,7 +278,7 @@ class BaroFix:
 		
 		
 		
-		types_list = ['RC_CHANNELS', 'GLOBAL_POSITION_INT', 'SCALED_PRESSURE', 'HIGHRES_IMU']
+		types_list = ['ATTITUDE', 'RC_CHANNELS', 'GLOBAL_POSITION_INT', 'SCALED_PRESSURE', 'HIGHRES_IMU']
 		
 		while True:
 			baro_delta = 0
@@ -287,7 +288,81 @@ class BaroFix:
 					#print(msg._mavlink_version)
 					#print(msg)
 					msg_type = msg.get_type() 
-					if msg_type == "RC_CHANNELS":
+					if msg_type == 'ATTITUDE':
+						if msg.pitch > 0.785:
+							pitch = 0.785
+						elif msg.pitch < -0.785:
+							pitch = -0.785
+						
+						if msg.roll > 0.785:
+							roll = 0.785
+						elif msg.roll > -0.785:
+							roll = -0.785
+						alt_compensate = self.baro2_alt / (math.cos(pitch) * math.cos(roll))
+						
+						try:
+							cur_alt = int(alt_compensate*100)
+
+							self.master.mav.heartbeat_send(0, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+							if cur_alt <= 0:
+								self.rf_alt = 1
+							else:
+								if self.mode == 0:
+									self.rf_alt = cur_alt
+								elif self.mode == 1:
+									last_fix = 0
+									cur_value = 0
+									
+									for cur_fix in correction_matrix:
+										if self.gp_vg < cur_value:
+											break
+											
+										last_fix = cur_fix
+										cur_value += 1
+									
+									baro_delta = last_fix+(1-cur_value-self.gp_vg)*(cur_fix-last_fix)
+									
+									self.rf_alt = int(cur_alt - baro_delta)
+								elif self.mode == 2:
+									self.rf_alt = self.rf_alt
+
+							self.log_telemetry_rf(self.rf_alt, cur_alt, baro_delta, self.gp_vg)
+							#---------------
+							
+							sign = mavlink2.MAVLink_distance_sensor_message(
+								time_boot_ms = self.get_time_boot_ms(),
+								min_distance = 1,
+								max_distance = 40000,
+								current_distance = self.rf_alt,
+								type = 3,
+								id = 0,
+								orientation = 25,#orientation = 100,#
+								covariance = 0,
+								horizontal_fov = 3,
+								vertical_fov = 3,
+								quaternion = [1, 0, 0, 0],
+								signal_quality = 100
+							)
+							self.master.mav.send(sign)
+							
+							'''
+							self.master.mav.distance_sensor_send(
+								time_boot_ms=self.get_time_boot_ms(),
+								min_distance=1,
+								max_distance=40000,
+								current_distance=self.rf_alt,
+								type=3,#type=4,
+								id=0,
+								orientation=25,
+								covariance=0
+							)
+							'''
+							#---------------
+							#---------------
+						except Exception as e:
+							self.log_error_message(f"Error on send FC data: {e}")						
+						
+					elif msg_type == 'RC_CHANNELS':
 						ch1 = msg.chan1_raw
 						ch2 = msg.chan2_raw
 						ch3 = msg.chan3_raw
@@ -340,67 +415,7 @@ class BaroFix:
 			except Exception as e:
 				self.log_error_message(f"Error on FC data read: {e}")
 			#=======================================================================================	
-			try:
-				cur_alt = int(self.baro2_alt*100)
 
-				self.master.mav.heartbeat_send(0, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
-				if cur_alt <= 0:
-					self.rf_alt = 1
-				else:
-					if self.mode == 0:
-						self.rf_alt = cur_alt
-					elif self.mode == 1:
-						last_fix = 0
-						cur_value = 0
-						
-						for cur_fix in correction_matrix:
-							if self.gp_vg < cur_value:
-								break
-								
-							last_fix = cur_fix
-							cur_value += 1
-						
-						baro_delta = last_fix+(1-cur_value-self.gp_vg)*(cur_fix-last_fix)
-						
-						self.rf_alt = int(cur_alt - baro_delta)
-					elif self.mode == 2:
-						self.rf_alt = self.rf_alt
-
-				self.log_telemetry_rf(self.rf_alt, cur_alt, baro_delta, self.gp_vg)
-				#---------------
-				
-				sign = mavlink2.MAVLink_distance_sensor_message(
-					time_boot_ms = self.get_time_boot_ms(),
-					min_distance = 1,
-					max_distance = 40000,
-					current_distance = self.rf_alt,
-					type = 3,
-					id = 0,
-					orientation = 25,#orientation = 100,#
-					covariance = 0,
-					horizontal_fov = 3,
-					vertical_fov = 3,
-					quaternion = [1, 0, 0, 0],
-					signal_quality = 100
-				)
-				self.master.mav.send(sign)
-				
-				'''
-				self.master.mav.distance_sensor_send(
-					time_boot_ms=self.get_time_boot_ms(),
-					min_distance=1,
-					max_distance=40000,
-					current_distance=self.rf_alt,
-					type=3,#type=4,
-					id=0,
-					orientation=25,
-					covariance=0
-				)
-				'''
-				#---------------
-				#---------------
-			except Exception as e:
-				self.log_error_message(f"Error on send FC data: {e}")
 			#====================================================================
 			time.sleep(0.001)
 		pass
@@ -414,11 +429,19 @@ class BaroFix:
 		self.log_debug_message("FC initialization start.",level=INFO)
 		self.master.wait_heartbeat()
 		
+		master.mav.request_data_stream_send(
+			target_system=master.target_system,
+			target_component=master.target_component,
+			req_stream_id=mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,  # Stream with ATTITUDE
+			req_message_rate=20,   # Frequency in Hz
+			start_stop=1           # 1 = start sending, 0 = stop
+		)
+		
 		self.master.mav.request_data_stream_send(
 			self.master.target_system,
 			self.master.target_component,
 			mavutil.mavlink.MAV_DATA_STREAM_RC_CHANNELS,
-			5,     # 10 Hz
+			2,     # 10 Hz
 			1       # start (0 = stop)
 		)
 		
@@ -426,7 +449,7 @@ class BaroFix:
 			self.master.target_system,
 			self.master.target_component,
 			mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS,
-			5,  # Hz
+			2,  # Hz
 			1   # start streaming
 		)		
 		
@@ -434,7 +457,7 @@ class BaroFix:
 			self.master.target_system,
 			self.master.target_component,
 			mavutil.mavlink.MAV_DATA_STREAM_POSITION,  # stream_id
-			5,  # rate in Hz
+			2,  # rate in Hz
 			1   # start streaming (0 = stop)
 		)		
 		
