@@ -11,7 +11,7 @@ from datetime import datetime
 import RPi.GPIO as GPIO
 import math
 
-VERSION = '0.6.3'
+VERSION = '0.6.4'
 
 INFO = logging.INFO
 DEBUG = logging.DEBUG
