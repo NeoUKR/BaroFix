@@ -1,3 +1,5 @@
+import struct
+import serial
 from baro import BME280
 import numpy as np
 from pymavlink import mavutil
@@ -11,7 +13,7 @@ from datetime import datetime
 import RPi.GPIO as GPIO
 import math
 
-VERSION = '0.6.4'
+VERSION = '0.7.1'
 
 INFO = logging.INFO
 DEBUG = logging.DEBUG
@@ -20,12 +22,13 @@ class BaroFix:
 	BARO_INIT_PULL = 200
 	BARO_STD_DEV = 1.2
 	BARO_READ_DELAY = 0.04
-	#RUN_PAUSE_S = 20
-	RUN_PAUSE_S = 1
+	RUN_PAUSE_S = 20
+	#RUN_PAUSE_S = 1
 	
 	__slots__ = (
 		"time_booting_s",
-		"master",
+		#"master",
+		"uart",
 		"mode",
 		"logger_telem",
 		"logger_error",
@@ -34,12 +37,15 @@ class BaroFix:
 		"baro0_press",
 		"baro1",
 		"baro1_press",
+		"baro1_press_comp",
 		"baro1_press_gnd",
 		"baro1_alt",
+		"baro1_temp",
 		"baro2",
 		"baro2_press",
 		"baro2_press_gnd",
 		"baro2_alt",
+		"baro2_temp",
 		"gp_vx",
 		"gp_vy",
 		"gp_vz",
@@ -61,6 +67,19 @@ class BaroFix:
 		"rf_alt",
 	)
 	
+	@staticmethod
+	def _crc8_dvb_s2(crc, ch):
+		"""CRC for MSPV2
+		*copied from inav-configurator
+		"""
+		crc ^= ch
+		for _ in range(8):
+			if (crc & 0x80):
+				crc = ((crc << 1) & 0xFF) ^ 0xD5
+			else:
+				crc = (crc << 1) & 0xFF
+		return crc	
+		
 	def led_init(self):
 		try:
 			GPIO.setmode(GPIO.BCM)
@@ -88,6 +107,7 @@ class BaroFix:
 			self.log_error_message(f"Error led set active.")
 	
 	def __init__(self):
+		self.time_booting_s = time.time()
 		self.logger_debug_make = True
 		self.log_init()
 		
@@ -97,7 +117,6 @@ class BaroFix:
 		#self.fc_init()
 		self.thread_init()
 		self.mode = 0
-		self.time_booting_s = time.time()
 		self.led_set_active()
 
 	def get_time_boot_ms(self):
@@ -206,8 +225,13 @@ class BaroFix:
 			baro1_array.append(round(self.baro1.read()[1], 2))
 			baro2_array.append(round(self.baro2.read()[1], 2))
 			
-		self.baro1_press_gnd = self.meadle_outliers(baro1_array)
-		self.baro2_press_gnd = self.meadle_outliers(baro2_array)
+		b1_g = self.meadle_outliers(baro1_array)
+		b2_g = self.meadle_outliers(baro2_array)
+		
+		self.baro1_press_comp = b2_g - b1_g
+		
+		self.baro1_press_gnd = b1_g + self.baro1_press_comp
+		self.baro2_press_gnd = b2_g
 		self.baro1_press = self.baro1_press_gnd
 		self.baro2_press = self.baro2_press_gnd
 
@@ -217,6 +241,7 @@ class BaroFix:
 		self.log_debug_message("Thread initialization start.",level=INFO)
 		threading.Thread(target=self.thread_baro).start()
 		self.fc_init()
+		time.sleep(2)
 		threading.Thread(target=self.thread_fc).start()
 		self.log_debug_message("Thread initialization finish.",level=INFO)
 
@@ -229,13 +254,19 @@ class BaroFix:
 
 		while True:
 			try:
-				baro1_array.append(round(self.baro1.read()[1], 2))
-				baro2_array.append(round(self.baro2.read()[1], 2))
+				b1 = self.baro1.read()
+				b2 = self.baro2.read()
+				
+				baro1_array.append(round(b1[1] + self.baro1_press_comp, 2))
+				baro2_array.append(round(b2[1], 2))
 			except Exception as e:
 				self.log_error_message(f"Error baro reading. {e}")
 			
 			if time.time() - last_read >= self.BARO_READ_DELAY:
 				try:
+					self.baro1_temp = b1[0]
+					self.baro2_temp = b2[0]
+					
 					baro1_freq_size = len(baro1_array)
 					baro2_freq_size = len(baro2_array)
 					baro1_freq_ps = freq_ps_block*baro1_freq_size
@@ -279,9 +310,15 @@ class BaroFix:
 		
 		
 		
-		types_list = ['ATTITUDE', 'RC_CHANNELS', 'GLOBAL_POSITION_INT', 'SCALED_PRESSURE', 'HIGHRES_IMU']
+		types_list = ['ATTITUDE', 'RC_CHANNELS', 'GLOBAL_POSITION_INT']#, 'SCALED_PRESSURE']
 		
 		while True:
+			self.send_baro(self.baro2_press, self.baro2_temp)
+			#self.baro2_alt
+			
+			#self.log_telemetry_rf(self.rf_alt, cur_alt, baro_delta, self.gp_vg)
+			
+			'''
 			baro_delta = 0
 			try:
 				msg = self.master.recv_match(type=types_list, blocking=True, timeout=0.02)
@@ -291,6 +328,7 @@ class BaroFix:
 					msg_type = msg.get_type() 
 					if msg_type == 'ATTITUDE':
 						#print(msg)
+
 						if msg.pitch > 0.785:
 							pitch = 0.785
 						elif msg.pitch < -0.785:
@@ -300,7 +338,7 @@ class BaroFix:
 						
 						if msg.roll > 0.785:
 							roll = 0.785
-						elif msg.roll > -0.785:
+						elif msg.roll < -0.785:
 							roll = -0.785
 						else:
 							roll = msg.roll
@@ -310,7 +348,8 @@ class BaroFix:
 						try:
 							cur_alt = int(alt_compensate*100)
 
-							self.master.mav.heartbeat_send(0, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+
+							#self.master.mav.heartbeat_send(0, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
 							if cur_alt <= 0:
 								self.rf_alt = 1
 							else:
@@ -334,24 +373,23 @@ class BaroFix:
 									self.rf_alt = self.rf_alt
 
 							self.log_telemetry_rf(self.rf_alt, cur_alt, baro_delta, self.gp_vg)
+
 							#---------------
-							'''
-							sign = mavlink2.MAVLink_distance_sensor_message(
-								time_boot_ms = self.get_time_boot_ms(),
-								min_distance = 1,
-								max_distance = 40000,
-								current_distance = self.rf_alt,
-								type = 3,
-								id = 0,
-								orientation = 25,#orientation = 100,#
-								covariance = 0,
-								horizontal_fov = 3,
-								vertical_fov = 3,
-								quaternion = [1, 0, 0, 0],
-								signal_quality = 100
-							)
-							self.master.mav.send(sign)
-							'''
+							#sign = mavlink2.MAVLink_distance_sensor_message(
+							#	time_boot_ms = self.get_time_boot_ms(),
+							#	min_distance = 1,
+							#	max_distance = 40000,
+							#	current_distance = self.rf_alt,
+							#	type = 3,
+							#	id = 0,
+							#	orientation = 25,#orientation = 100,#
+							#	covariance = 0,
+							#	horizontal_fov = 3,
+							#	vertical_fov = 3,
+							#	quaternion = [1, 0, 0, 0],
+							#	signal_quality = 100
+							#)
+							#self.master.mav.send(sign)
 							
 							self.master.mav.distance_sensor_send(
 								time_boot_ms=self.get_time_boot_ms(),
@@ -421,14 +459,64 @@ class BaroFix:
 						
 			except Exception as e:
 				self.log_error_message(f"Error on FC data read: {e}")
+			'''
 			#=======================================================================================	
 
 			#====================================================================
-			time.sleep(0.001)
+			time.sleep(0.01)
 		pass
 		
 		
+	def send_baro(self, press, temp):
+		payload = bytearray()
+		payload += struct.pack("<B", 1)                  # uint8_t
+		payload += struct.pack("<I", self.get_time_boot_ms())#int((time.time()-boot_time)*1e3))             # uint32_t
+		payload += struct.pack("<f", press*100)         # float
+		payload += struct.pack("<h", int(temp*100))            # int16_t
+		#payload += struct.pack("<f", 22334.23)         # float
+		#payload += struct.pack("<h", 1039)            # int16_t
+		
+		checksum = 0
+		bufView = bytearray()
+		bufView.append(36) #$ 
+		bufView.append(88) #X
+		bufView.append(60) #<
+		bufView.append(0) #flag: reserved, set to 0
+		bufView += struct.pack("<h", 0x1F05) #MSP2_SENSOR_BAROMETER
+		size_payload = len(payload)
+		#print('size',size_payload)
+		bufView += struct.pack("<h", size_payload)
+		bufView += payload
+		#print(len(bufView))
+		
+		size = size_payload + 9
+		for si in range(3, size-1):
+			checksum = self._crc8_dvb_s2(checksum, bufView[si])
+			
+		bufView += struct.pack("<B", checksum)
+		
+		#print(time.time(), press, temp)
+		
+		res = self.uart.write(bufView)		
+			
 	def fc_init(self):
+		self.uart = serial.Serial('/dev/ttyS0', 115200, timeout=1)
+		#self.uart.port = '/dev/ttyS0'
+		#self.uart.baudrate = 115200
+		#self.uart.bytesize = serial.EIGHTBITS
+		#self.uart.parity = serial.PARITY_NONE
+		#self.uart.stopbits = serial.STOPBITS_ONE
+		##self.uart.timeout = 1
+		#self.uart.xonxoff = False
+		#self.uart.rtscts = False
+		#self.uart.dsrdtr = False
+		##self.uart.writeTimeout = 1
+		##self.ser_trials = trials
+		##self.serial_port_write_lock = Lock()
+		##self.serial_port_read_lock = Lock()
+		print('serial connected')
+	        		
+		'''
 		self.log_debug_message("FC connection.",level=INFO)
 		connect_string = '/dev/ttyS0'
 		#self.master = mavutil.mavlink_connection(connect_string, baud = 115200, source_system=1, source_component=145)
@@ -440,7 +528,7 @@ class BaroFix:
 			target_system=self.master.target_system,
 			target_component=self.master.target_component,
 			req_stream_id=mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,  # Stream with ATTITUDE
-			req_message_rate=20,   # Frequency in Hz
+			req_message_rate=15,   # Frequency in Hz
 			start_stop=1           # 1 = start sending, 0 = stop
 		)
 		
@@ -451,23 +539,29 @@ class BaroFix:
 			2,     # 10 Hz
 			1       # start (0 = stop)
 		)
+		'''
 		
+		'''
 		self.master.mav.request_data_stream_send(
 			self.master.target_system,
 			self.master.target_component,
 			mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS,
 			2,  # Hz
 			1   # start streaming
-		)		
-		
+		)	
+		'''
+			
+		'''
 		self.master.mav.request_data_stream_send(
 			self.master.target_system,
 			self.master.target_component,
 			mavutil.mavlink.MAV_DATA_STREAM_POSITION,  # stream_id
 			2,  # rate in Hz
 			1   # start streaming (0 = stop)
-		)		
-		
+		)	
+		'''
+			
+		'''
 		self.master.mav.request_data_stream_send(
 			self.master.target_system,
 			self.master.target_component,
@@ -475,8 +569,9 @@ class BaroFix:
 			5,  # Rate in Hz
 			1    # Start streaming
 		)		
+		'''
 		
-		self.master.wait_heartbeat()
+		#self.master.wait_heartbeat()
 		self.log_debug_message("FC initialization finish.",level=INFO)
 		
 	
