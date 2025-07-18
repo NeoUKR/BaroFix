@@ -13,7 +13,7 @@ from datetime import datetime
 import RPi.GPIO as GPIO
 import math
 
-VERSION = '0.7.1'
+VERSION = '0.8.0'
 
 INFO = logging.INFO
 DEBUG = logging.DEBUG
@@ -22,8 +22,8 @@ class BaroFix:
 	BARO_INIT_PULL = 200
 	BARO_STD_DEV = 1.2
 	BARO_READ_DELAY = 0.04
-	RUN_PAUSE_S = 20
-	#RUN_PAUSE_S = 1
+	#RUN_PAUSE_S = 20
+	RUN_PAUSE_S = 1
 	
 	__slots__ = (
 		"time_booting_s",
@@ -43,8 +43,10 @@ class BaroFix:
 		"baro1_temp",
 		"baro2",
 		"baro2_press",
+		"baro2_press_origin",
 		"baro2_press_gnd",
 		"baro2_alt",
+		"baro2_alt_origin",
 		"baro2_temp",
 		"gp_vx",
 		"gp_vy",
@@ -185,7 +187,7 @@ class BaroFix:
 	def log_telemetry_init(self):
 		self.log_telemetry_message("FMT, 1, 99, BAR0, Qf, TimeUS, Pressure")
 		self.log_telemetry_message("FMT, 2, 99, BAR1, Qffff, TimeUS, Pressure, Altitude, Frequency, Frequency values")
-		self.log_telemetry_message("FMT, 3, 99, BAR2, Qffff, TimeUS, Pressure, Altitude, Frequency, Frequency values")
+		self.log_telemetry_message("FMT, 3, 99, BAR2, Qffff, TimeUS, Pressure origin, Altitude origin, Pressure, Altitude, Frequency, Frequency values")
 		self.log_telemetry_message("FMT, 4, 99, GNSS, Qffff, TimeUS")
 		self.log_telemetry_message("FMT, 5, 99, GP, Qffff, TimeUS, Velocity x, Velocity y, Velocity z, Velocity ground, Altitude, Altutude relative")
 		self.log_telemetry_message("FMT, 6, 99, RC, Qffff, TimeUS, Ch 1, Ch 2, Ch 3, Ch 4, Ch 5, Ch 6, Ch 7, Ch 8, Ch 9, Ch 10, Ch 11, Ch 12")
@@ -197,8 +199,8 @@ class BaroFix:
 	def log_telemetry_baro1(self, press, alt, freq, freq_values):
 		self.log_telemetry_message(f"BAR1, {self.get_time_us()}, {press}, {alt}, {freq}, {freq_values}")
 
-	def log_telemetry_baro2(self, press, alt, freq, freq_values):
-		self.log_telemetry_message(f"BAR2, {self.get_time_us()}, {press}, {alt}, {freq}, {freq_values}")
+	def log_telemetry_baro2(self, press_origin, alt_origin, press, alt, freq, freq_values):
+		self.log_telemetry_message(f"BAR2, {self.get_time_us()}, {press_origin}, {alt_origin}, {press}, {alt}, {freq}, {freq_values}")
 		
 	def log_telemetry_gp(self, vx, vy, vz, vg, alt, r_alt):
 		self.log_telemetry_message(f"GP, {self.get_time_us()}, {vx}, {vy}, {vz}, {vg}, {alt}, {r_alt}")
@@ -280,9 +282,17 @@ class BaroFix:
 					#=========================================
 					baro2_array.append(self.baro2_press)
 					baro2_array.append(self.baro2_press)
-					self.baro2_press = self.meadle_outliers(baro2_array)
-					self.baro2_alt = round(44330 * (1.0 - (self.baro2_press / self.baro2_press_gnd) ** (1/5.255)), 2)
-					self.log_telemetry_baro2(self.baro2_press, self.baro2_alt, baro2_freq_ps, baro2_freq_size)
+					self.baro2_press_origin = self.meadle_outliers(baro2_array)
+					self.baro2_alt_origin = round(44330 * (1.0 - (self.baro2_press_origin / self.baro2_press_gnd) ** (1/5.255)), 2)
+					#=========================================
+					if (self.baro1_press - self.baro2_press_origin) > 0.03:
+						self.baro2_press = (self.baro1_press + self.baro2_press_origin) / 2
+						self.baro2_alt = round(44330 * (1.0 - (self.baro2_press / self.baro2_press_gnd) ** (1/5.255)), 2)
+					else:
+						self.baro2_press = self.baro2_press_origin
+						self.baro2_alt = self.baro2_alt_origin
+					#=========================================
+					self.log_telemetry_baro2(self.baro2_press_origin, self.baro2_alt_origin, self.baro2_press, self.baro2_alt, baro2_freq_ps, baro2_freq_size)
 					#=========================================
 					#print(self.baro1_press, self.baro2_press)
 				except Exception as e:
@@ -313,10 +323,10 @@ class BaroFix:
 		types_list = ['ATTITUDE', 'RC_CHANNELS', 'GLOBAL_POSITION_INT']#, 'SCALED_PRESSURE']
 		
 		while True:
-			self.send_baro(self.baro2_press, self.baro2_temp)
-			#self.baro2_alt
-			
-			#self.log_telemetry_rf(self.rf_alt, cur_alt, baro_delta, self.gp_vg)
+			try:
+				self.send_baro(self.baro2_press, self.baro2_temp)
+			except Exception as e:
+				self.log_error_message(f"Error on FC data read: {e}")
 			
 			'''
 			baro_delta = 0
@@ -468,11 +478,17 @@ class BaroFix:
 		
 		
 	def send_baro(self, press, temp):
+		send_time = self.get_time_boot_ms()
+		send_press = press*100
+		send_temp = int(temp*100)
+		
+		#print("send", send_time, send_press, send_temp)
+		
 		payload = bytearray()
-		payload += struct.pack("<B", 1)                  # uint8_t
-		payload += struct.pack("<I", self.get_time_boot_ms())#int((time.time()-boot_time)*1e3))             # uint32_t
-		payload += struct.pack("<f", press*100)         # float
-		payload += struct.pack("<h", int(temp*100))            # int16_t
+		payload += struct.pack("<B", 0)                  # uint8_t
+		payload += struct.pack("<I", send_time) #int((time.time()-boot_time)*1e3))             # uint32_t
+		payload += struct.pack("<f", send_press)         # float
+		payload += struct.pack("<h", send_temp)            # int16_t
 		#payload += struct.pack("<f", 22334.23)         # float
 		#payload += struct.pack("<h", 1039)            # int16_t
 		
@@ -514,7 +530,7 @@ class BaroFix:
 		##self.ser_trials = trials
 		##self.serial_port_write_lock = Lock()
 		##self.serial_port_read_lock = Lock()
-		print('serial connected')
+		#print('serial connected')
 	        		
 		'''
 		self.log_debug_message("FC connection.",level=INFO)
